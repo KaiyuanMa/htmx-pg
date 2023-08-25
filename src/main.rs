@@ -1,17 +1,16 @@
-mod components;
-
-use components::{NameForm, CounterButton, NameHeader};
 use redis::Commands;
 use leptos::*;
 use uuid::Uuid;
 use actix_web::{ web, get, post, App, HttpRequest, HttpResponse, HttpServer, middleware, cookie::Cookie};
 use serde::{Deserialize, Serialize};
-
+use handlebars::Handlebars;
+use serde_json::json;
 
 
 struct AppState {
     redis_client: redis::Client,
     redis_db: redis::Client,
+    reg: Handlebars<'static>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -37,25 +36,15 @@ async fn index(req: HttpRequest, data: web::Data<AppState>) ->  HttpResponse {
         Ok(value) => {
             let string_state: String = db.get(&value).unwrap();
             let state: MyState = serde_urlencoded::from_str(&string_state).unwrap();
-            html = leptos::ssr::render_to_string(move |cx| view! { cx,
-                <head>
-                    <script src="https://unpkg.com/htmx.org@1.9.4"></script>
-                </head>
-                <body>
-                    <NameHeader name=state.name.to_string()/>
-                    <CounterButton count=state.count/>
-                </body>
-            });
+            let content= format!("{} {}", 
+                data.reg.render("name_header", &json!({"name": state.name})).unwrap(), 
+                data.reg.render("count_button", &json!({"count": state.count})).unwrap()
+            );
+            html = data.reg.render("index", &json!({"content": content})).unwrap();
         },
         _ => {
-            html = leptos::ssr::render_to_string(move |cx| view! { cx,
-                <head>
-                    <script src="https://unpkg.com/htmx.org@1.9.4"></script>
-                </head>
-                <body>
-                    <NameForm />
-                </body>
-            });
+            let content= data.reg.render("name_form", &json!({})).unwrap();
+            html = data.reg.render("index", &json!({"content": content})).unwrap();
         }
     };
     return HttpResponse::Ok().cookie(
@@ -78,10 +67,10 @@ async fn new_user(req: HttpRequest, params: web::Form<MyState>, data: web::Data<
     let string_state = serde_urlencoded::to_string(&params).unwrap();
     db.set::<&str, &String, ()>(&use_id, &string_state).unwrap();
 
-    let html: String = leptos::ssr::render_to_string(move |cx| view! { cx,
-        <NameHeader name=params.name.to_string()/>
-        <CounterButton count=params.count/>
-    });
+    let html: String = format!("{} {}", 
+        data.reg.render("name_header", &json!({"name": params.name})).unwrap(), 
+        data.reg.render("count_button", &json!({"count": params.count})).unwrap()
+    );
     
     return HttpResponse::Ok().content_type("text/html; charset=utf-8").body(html);
 }
@@ -108,6 +97,7 @@ async fn clicked(req: HttpRequest, data: web::Data<AppState>) ->  HttpResponse {
 async fn main() -> std::io::Result<()> {
     let redis_client = redis::Client::open("redis://127.0.0.1/0").expect("Failed to connect to Redis");
     let redis_db = redis::Client::open("redis://127.0.0.1/1").expect("Failed to connect to Redis");
+    let reg = register_template();
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
 
     log::info!("server at http://localhost:8080");
@@ -115,7 +105,7 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .wrap(middleware::Logger::default())
-            .app_data(web::Data::new(AppState { redis_client: redis_client.clone(), redis_db: redis_db.clone() }))
+            .app_data(web::Data::new(AppState { redis_client: redis_client.clone(), redis_db: redis_db.clone(), reg: reg.clone() }))
             .service(index)
             .service(clicked)
             .service(new_user)
@@ -123,4 +113,13 @@ async fn main() -> std::io::Result<()> {
     .bind(("localhost", 8080))?
     .run()
     .await
+}
+
+fn register_template() ->  Handlebars<'static> {
+    let mut reg = Handlebars::new();
+    reg.register_template_file("count_button", "./src/components/count_button.hbs").expect("Failed to register template");
+    reg.register_template_file("name_form", "./src/components/name_form.hbs").expect("Failed to register template");
+    reg.register_template_file("name_header", "./src/components/name_header.hbs").expect("Failed to register template");
+    reg.register_template_file("index", "./src/components/index.hbs").expect("Failed to register template");
+    return reg
 }
