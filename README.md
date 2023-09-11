@@ -1,5 +1,14 @@
 # htmx-rust-todomvc
-Created using htmx, rust, actix_web
+
+What's used in this repo
+
+Rust
+
+Htmx
+
+actix_web as router
+
+askama as template
 
 Use `cargo run` to start
 
