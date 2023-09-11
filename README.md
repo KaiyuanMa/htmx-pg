@@ -1,7 +1,4 @@
-# htmx-rust-todomvc
-
-What's used in this repo
-
+# What's used in this repo
 Rust
 
 Htmx
