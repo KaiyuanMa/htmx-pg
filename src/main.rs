@@ -129,7 +129,7 @@ async fn clear_completed(_req: HttpRequest, session: Session) -> HttpResponse {
 async fn main() -> std::io::Result<()> {
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
 
-    log::info!("server at http://localhost:8080");
+    log::info!("server at http://localhost:8080/?filter=all");
 
     HttpServer::new(move || {
         App::new()
