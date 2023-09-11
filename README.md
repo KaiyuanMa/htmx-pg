@@ -1,7 +1,4 @@
-# htmx-rust-todomvc
-
-What's used in this repo
-
+# What's used in this repo
 Rust
 
 Htmx
@@ -9,6 +6,8 @@ Htmx
 actix_web as router
 
 askama as template
+
+# How to run
 
 Use `cargo run` to start
 
