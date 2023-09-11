@@ -1,0 +1,86 @@
+<head>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/static/base.css" />
+  <link rel="stylesheet" href="/static/index.css" />
+  <link />
+</head>
+<body>
+  <section class="todoapp">
+    <header class="header">
+      <h1>todos</h1>
+      <form
+        hx-post="/todos"
+        hx-target="#todo-list"
+        hx-swap="afterbegin"
+        _="on htmx:afterOnLoad set #txtTodo.value to ''"
+      >
+        <input
+          id="txtTodo"
+          class="new-todo"
+          name="todo"
+          placeholder="What needs to be done?"
+          autofocus=""
+        />
+      </form>
+    </header>
+    <section class="main">
+      <input id="toggle-all" class="toggle-all" type="checkbox" />
+      <label for="toggle-all">Mark all as complete</label>
+      <ul id="todo-list" class="todo-list">
+       {{todos|safe}}
+      </ul>
+    </section>
+    <footer class="footer">
+      {{item_count|safe}}
+      <ul class="filters">
+        <li>
+          <a
+            href="/?filter=all"
+            class="{% if filter == "all" %}selected{% endif %}"
+            >All</a
+          >
+        </li>
+        <li>
+          <a
+            href="/?filter=active"
+            class="{% if filter == "active" %}selected{% endif %}"
+          >
+          Active
+          </a>
+        </li>
+        <li>
+          <a
+            href="/?filter=completed"
+            class="{% if filter == "completed" %}selected{% endif %}"
+          >
+          Completed
+          </a>
+        </li>
+      </ul>
+      <button
+        class="clear-completed"
+        hx-post="/todos/clear-completed"
+        hx-target="#todo-list"
+      >
+        Clear completed
+      </button>
+    </footer>
+  </section>
+  <footer class="info">
+    <p> Click to edit a todo </p>
+    <p>
+      Templated by
+      <a href='http://sindresorhus.com'> Sindre Sorhus <a/>
+    </p>
+    <p>
+      Created by
+      <a href='https://kaiyuanm.com/'> Sindre Sorhus <a/>
+    </p>
+    <p>
+      Part of
+      <a href='http://todomvc.com'> Sindre Sorhus <a/>
+    </p>
+  <footer/>
+  <script src="https://unpkg.com/htmx.org@1.9.4"></script>
+  <script src="https://unpkg.com/hyperscript.org@0.9.11"></script>
+</body>

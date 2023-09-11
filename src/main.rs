@@ -1,126 +1,157 @@
-mod components;
-
-use components::{NameForm, CounterButton, NameHeader};
-use redis::Commands;
-use leptos::*;
-use uuid::Uuid;
-use actix_web::{ web, get, post, App, HttpRequest, HttpResponse, HttpServer, middleware, cookie::Cookie};
+mod templates;
+use actix_web::{ get, post, delete, App, HttpRequest, HttpResponse, HttpServer, middleware, web, cookie::SameSite, patch};
+use askama::Template;
+use log::info;
+use templates::Todo;
+use actix_files as fs;
+use actix_session::{storage::CookieSessionStore, SessionMiddleware, Session};
+use actix_web::cookie::Key;
+use templates::{Index, TodoItem, TodoList, EditItem, ItemCount};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
-
-
-struct AppState {
-    redis_client: redis::Client,
-    redis_db: redis::Client,
+fn get_items_left (todos: &Vec<Todo>) -> i32 {
+    let mut count = 0;
+    for todo in todos {
+        if todo.done == false {
+            count += 1;
+        }
+    }
+    return count;
 }
-
-#[derive(Serialize, Deserialize)]
-struct MyState {
-    count: usize,
-    name: String,
-}
-
-fn get_session_id(req: HttpRequest) -> String {
-    let cookie = req.cookie("session").unwrap_or_else(|| Cookie::new("session", Uuid::new_v4().to_string()));
-    let key = cookie.value();
-    return key.to_string();
+#[derive(Deserialize)]
+struct IndexQuery {
+    filter: String
 }
 
 #[get("/")]
-async fn index(req: HttpRequest, data: web::Data<AppState>) ->  HttpResponse {
-    let session_id = get_session_id(req);
-    let mut con: redis::Connection = data.redis_client.get_connection().expect("Failed to get Redis connection");
-    let mut db: redis::Connection = data.redis_db.get_connection().expect("Failed to get Redis connection");
-    let user_uuid: std::result::Result<String, redis::RedisError> = con.get(&session_id);
-    let html;
-    match user_uuid {
-        Ok(value) => {
-            let string_state: String = db.get(&value).unwrap();
-            let state: MyState = serde_urlencoded::from_str(&string_state).unwrap();
-            html = leptos::ssr::render_to_string(move |cx| view! { cx,
-                <head>
-                    <script src="https://unpkg.com/htmx.org@1.9.4"></script>
-                </head>
-                <body>
-                    <NameHeader name=state.name.to_string()/>
-                    <CounterButton count=state.count/>
-                </body>
-            });
-        },
-        _ => {
-            html = leptos::ssr::render_to_string(move |cx| view! { cx,
-                <head>
-                    <script src="https://unpkg.com/htmx.org@1.9.4"></script>
-                </head>
-                <body>
-                    <NameForm />
-                </body>
-            });
-        }
-    };
-    return HttpResponse::Ok().cookie(
-        Cookie::build("session", &*session_id)
-                .path("/")
-                .secure(false)
-                .finish(),
-    ).content_type("text/html; charset=utf-8").body(html);
-}
-
-#[post("/name")]
-async fn new_user(req: HttpRequest, params: web::Form<MyState>, data: web::Data<AppState>) -> HttpResponse{
-    let session_id = get_session_id(req);
-    let use_id = Uuid::new_v4().to_string();
-
-    let mut con = data.redis_client.get_connection().expect("Failed to get Redis connection");
-    con.set::<&str, &String, ()>(&session_id, &use_id).unwrap();
-
-    let mut db = data.redis_db.get_connection().expect("Failed to get Redis connection");
-    let string_state = serde_urlencoded::to_string(&params).unwrap();
-    db.set::<&str, &String, ()>(&use_id, &string_state).unwrap();
-
-    let html: String = leptos::ssr::render_to_string(move |cx| view! { cx,
-        <NameHeader name=params.name.to_string()/>
-        <CounterButton count=params.count/>
-    });
-    
+async fn index(req: HttpRequest, session: Session, params: web::Query<IndexQuery>) ->  HttpResponse {
+    let todos = session.get::<Vec<Todo>>("todo").unwrap().unwrap_or(vec![]);
+    let filtered_todos:Vec<Todo>;
+    let filter = params.into_inner().filter;
+    match filter.as_ref() {
+        "all" => filtered_todos = todos,
+        "active" => filtered_todos = todos.into_iter().filter(|todo| todo.done == false).collect(),
+        "completed" => filtered_todos = todos.into_iter().filter(|todo| todo.done == true).collect(),
+        _ => filtered_todos = todos
+    }
+    let count = filtered_todos.len() as i32;
+    let todo_items = TodoList {todos: filtered_todos};
+    let item_count = ItemCount {items_left:count};
+    let html = Index {todos: todo_items, item_count, filter}.render().unwrap();
     return HttpResponse::Ok().content_type("text/html; charset=utf-8").body(html);
 }
 
-#[post("/clicked")] 
-async fn clicked(req: HttpRequest, data: web::Data<AppState>) ->  HttpResponse {
-    let session_id = get_session_id(req);
-    let mut con = data.redis_client.get_connection().expect("Failed to get Redis connection");
-    let use_id: String = con.get(&session_id).unwrap();
+#[derive(Serialize, Deserialize, Debug)]
+struct TodoParams {
+    todo: String
+}
 
-    let mut db = data.redis_db.get_connection().expect("Failed to get Redis connection");
-    let string_state: String = db.get(&use_id).unwrap();
+#[post("/todos")]
+async fn add_todo(_req: HttpRequest, params: web::Form<TodoParams>, session: Session) -> HttpResponse {
+    let mut todos = session.get::<Vec<Todo>>("todo").unwrap().unwrap_or(vec![]);
+    let name = params.into_inner().todo;
+    let new_todo = Todo {id: Uuid::new_v4(), name, done: false};
+    todos.push(new_todo.clone());
+    let todo = TodoItem {todo:new_todo}.render().unwrap();
 
-    let mut state: MyState = serde_urlencoded::from_str(&string_state).unwrap();
-    let count = state.count + 1;
-    state.count = count;
-    let string_state = serde_urlencoded::to_string(state).unwrap();
+    let count = get_items_left(&todos);
+    let item_count = ItemCount {items_left:count}.render().unwrap();
+    let html = format!("{}{}", todo, item_count);
+    session.insert("todo", todos).unwrap();
+    return HttpResponse::Ok().content_type("text/html; charset=utf-8").body(html);
+}
 
-    let _: () = db.set(use_id, string_state).unwrap();
-    return HttpResponse::Ok().content_type("text/html; charset=utf-8").body(format!("{}", count));
+#[get("/todos/edit/{id}")]
+async fn edit_item(req: HttpRequest, session: Session, path: web::Path<uuid::Uuid>,) -> HttpResponse {
+    let id = path.into_inner();
+    let todos = session.get::<Vec<Todo>>("todo").unwrap().unwrap_or(vec![]);
+    let todo = todos.into_iter().find(|todo| todo.id == id).unwrap();
+    let html = EditItem {todo}.render().unwrap();
+    return HttpResponse::Ok().content_type("text/html; charset=utf-8").body(html);
+}
+
+
+#[patch("/todos/{id}")]
+async fn update_item_html(_req: HttpRequest, session: Session, path: web::Path<uuid::Uuid>) -> HttpResponse {
+    let id = path.into_inner();
+    let mut todos = session.get::<Vec<Todo>>("todo").unwrap().unwrap_or(vec![]);
+    let count = get_items_left(&todos) - 1;
+    let mut todo = todos.iter().position(|todo| todo.id == id).unwrap();
+    todos[todo].done = !todos[todo].done;
+    let todo = TodoItem { todo:todos[todo].clone()}.render().unwrap();
+    let item_count = ItemCount {items_left:count}.render().unwrap();
+    let html = format!("{}{}", todo, item_count);
+    session.insert("todo", todos).unwrap();
+    return HttpResponse::Ok().content_type("text/html; charset=utf-8").body(html);
+}
+
+
+#[post("/todos/update/{id}")]
+async fn update_item(_req: HttpRequest, session: Session, path: web::Path<uuid::Uuid>, params: web::Form<TodoParams>) -> HttpResponse {
+    let id = path.into_inner();
+    let name = params.into_inner().todo;
+    let todos = session.get::<Vec<Todo>>("todo").unwrap().unwrap_or(vec![]);
+    let count = get_items_left(&todos);
+    let mut todo = todos.into_iter().find(|todo| todo.id == id).unwrap();
+    todo.name = name;
+    let todo = TodoItem {todo}.render().unwrap();
+
+    let item_count = ItemCount {items_left:count}.render().unwrap();
+    let html = format!("{}{}", todo, item_count);
+    return HttpResponse::Ok().content_type("text/html; charset=utf-8").body(html);
+}
+
+#[delete("/todos/{id}")]
+async fn delete_item(_req: HttpRequest, session: Session, path: web::Path<uuid::Uuid>) -> HttpResponse {
+    let id: Uuid = path.into_inner();
+    let todos = session.get::<Vec<Todo>>("todo").unwrap().unwrap_or(vec![]);
+    let todos = todos.into_iter().filter(|todo| todo.id != id).collect::<Vec<Todo>>();
+    let count = get_items_left(&todos);
+    let item_count: String = ItemCount {items_left:count}.render().unwrap();
+    session.insert("todo", todos).unwrap();
+    return HttpResponse::Ok().content_type("text/html; charset=utf-8").body(item_count);
+}
+
+#[post("/todos/clear-completed")]
+async fn clear_completed(_req: HttpRequest, session: Session) -> HttpResponse {
+    let todos = session.get::<Vec<Todo>>("todo").unwrap().unwrap_or(vec![]);
+    let todos = todos.into_iter().filter(|todo| todo.done == false).collect::<Vec<Todo>>();
+    let count = get_items_left(&todos);
+    let item_count: String = ItemCount {items_left:count}.render().unwrap();
+    let todo_list = TodoList {todos: todos.clone()};
+    session.insert("todo", todos).unwrap();
+    let html = format!("{}{}", todo_list, item_count);
+    return HttpResponse::Ok().content_type("text/html; charset=utf-8").body(html);
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let redis_client = redis::Client::open("redis://127.0.0.1/0").expect("Failed to connect to Redis");
-    let redis_db = redis::Client::open("redis://127.0.0.1/1").expect("Failed to connect to Redis");
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
 
     log::info!("server at http://localhost:8080");
 
     HttpServer::new(move || {
         App::new()
+            .wrap(
+                SessionMiddleware::builder(CookieSessionStore::default(), Key::from(&[0; 64]))
+                    .cookie_same_site(SameSite::None)
+                    .cookie_secure(true)
+                    .build(),
+            )
+            .service(fs::Files::new("/static", "./static"))
             .wrap(middleware::Logger::default())
-            .app_data(web::Data::new(AppState { redis_client: redis_client.clone(), redis_db: redis_db.clone() }))
             .service(index)
-            .service(clicked)
-            .service(new_user)
+            .service(add_todo)
+            .service(update_item_html)
+            .service(delete_item)
+            .service(edit_item)
+            .service(update_item)
+            .service(clear_completed)
     })
     .bind(("localhost", 8080))?
     .run()
     .await
 }
+
+
